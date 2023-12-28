@@ -4,8 +4,8 @@ module.exports = function (config, logger = null) {
     let connection;
     let promisifiedQuery;
     let connectionAttempts = 0;
-    if (!config.maxAttampts) {
-        config.maxAttampts = 5;
+    if (!config.maxAttempts) {
+        config.maxAttempts = 5;
     }
     const log = logger || console;
 
@@ -33,7 +33,7 @@ module.exports = function (config, logger = null) {
     }
 
     function handleConnectionError(e) {
-        if (connectionAttempts < config.maxAttampts) {
+        if (connectionAttempts < config.maxAttempts) {
             connectionAttempts++;
             log.error('db/connect', {
                 msg: e.message,
@@ -41,7 +41,14 @@ module.exports = function (config, logger = null) {
                 text: 'Reconnecting',
                 attempts: connectionAttempts
             });
-            connect();
+            connect().catch(e => {
+                log.error('db/connect', {
+                    msg: e.message,
+                    code: e.code,
+                    text: 'Error during reconnection attempt',
+                    attempts: connectionAttempts
+                });
+            });
         } else {
             log.error('db/connect', {
                 msg: e.message,
