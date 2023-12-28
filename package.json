@@ -1,0 +1,27 @@
+{
+  "name": "led-mysql",
+  "version": "1.0.0",
+  "description": "MySQL wrapper",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lettex/led-mysql.git"
+  },
+  "keywords": [
+    "mysql",
+    "async"
+  ],
+  "author": "Konstantin Safronov",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Lettex/led-mysql/issues"
+  },
+  "homepage": "https://github.com/Lettex/led-mysql#readme",
+  "dependencies": {
+    "mysql": "^2.18.1",
+    "util": "^0.12.5"
+  }
+}
