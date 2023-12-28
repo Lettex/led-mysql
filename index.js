@@ -2,36 +2,33 @@ const util = require('util');
 const mysql = require('mysql');
 module.exports = function (config, logger = null) {
     let connection;
-    let log;
     let promisifiedQuery;
     let connectionAttempts = 0;
     if (!config.maxAttampts) {
         config.maxAttampts = 5;
     }
-    if (!logger) {
-        log = console;
-    } else {
-        log = logger;
-    }
+    const log = logger || console;
 
     function connect() {
-        connection = mysql.createConnection(config);
-        connection.connect(function (err) {
-            if (err) {
-                //error on initial connection
-                log.error('db/connect', {
-                    msg: err.message,
-                    code: err.code,
-                    text: 'Error on initial connection'
-                });
-                return;
-            }
-            promisifiedQuery = util.promisify(connection.query).bind(connection);
-            connection.on('connect', function () {
-                connectionAttempts = 0;
+        return new Promise((resolve, reject) => {
+            connection = mysql.createConnection(config);
+            connection.connect(function (err) {
+                if (err) {
+                    log.error('db/connect', {
+                        msg: err.message,
+                        code: err.code,
+                        text: 'Error on initial connection'
+                    });
+                    reject(err);
+                } else {
+                    promisifiedQuery = util.promisify(connection.query).bind(connection);
+                    connection.on('connect', function () {
+                        connectionAttempts = 0;
+                    });
+                    connection.on('error', handleConnectionError);
+                    resolve();
+                }
             });
-            //error on connected session
-            connection.on('error', handleConnectionError);
         });
     }
 
@@ -55,9 +52,6 @@ module.exports = function (config, logger = null) {
         }
     }
 
-    // Establish initial connection
-    connect();
-
     return {
         /**
          * Executes a SQL query and returns a promise.
@@ -65,7 +59,10 @@ module.exports = function (config, logger = null) {
          * @param {[]|{}} args - An array of values to substitute in the SQL query.
          * @returns {Promise} A promise that resolves with the query result.
          */
-        query(sql, args = []) {
+        async query(sql, args = []) {
+            if (typeof promisifiedQuery !== 'function') {
+                await connect();
+            }
             return promisifiedQuery(sql, args)
                 .then(results => results)
                 .catch(err => {
@@ -166,7 +163,7 @@ module.exports = function (config, logger = null) {
                 let uniq;
                 let existingId;
                 do {
-                    uniq = core.number.rand(min, max);
+                    uniq = Math.floor(min + Math.random() * (max - min + 1));
                     const sql = `SELECT \`${id}\`
                                  FROM \`${table}\`
                                  WHERE \`${id}\` = ?`;
