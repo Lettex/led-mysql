@@ -1,61 +1,86 @@
 const util = require('util');
 const mysql = require('mysql');
 module.exports = function (config, logger = null) {
-    let connection;
-    let promisifiedQuery;
+
     let connectionAttempts = 0;
-    if (!config.maxAttempts) {
+    if (typeof config.maxAttempts === 'undefined') {
         config.maxAttempts = 5;
     }
+    if (typeof config.connectionLimit === 'undefined') {
+        config.connectionLimit = 10;
+    }
+    if (typeof config.acquireTimeout === 'undefined') {
+        config.acquireTimeout = 10000;
+    }
+    if (typeof config.waitForConnections === 'undefined') {
+        config.waitForConnections = true;
+    }
+    if (typeof config.queueLimit === 'undefined') {
+        config.queueLimit = 0;
+    }
+    if (typeof config.queryLog === 'undefined') {
+        config.queryLog = false;
+    }
     const log = logger || console;
+    let pool = null;
 
-    function connect() {
-        return new Promise((resolve, reject) => {
-            connection = mysql.createConnection(config);
-            connection.connect(function (err) {
-                if (err) {
-                    log.error('db/connect', {
-                        msg: err.message,
-                        code: err.code,
-                        text: 'Error on initial connection'
-                    });
-                    reject(err);
-                } else {
-                    promisifiedQuery = util.promisify(connection.query).bind(connection);
-                    connection.on('connect', function () {
-                        connectionAttempts = 0;
-                    });
-                    connection.on('error', handleConnectionError);
-                    resolve();
-                }
+    async function connect() {
+        if (connectionAttempts >= config.maxAttempts) {
+            log.error('db/pool', {
+                msg: 'Maximum connection attempts reached',
+                text: 'Exiting'
             });
-        });
+            process.exit(1);
+        }
+        return await mysql.createPool(config);
     }
 
-    function handleConnectionError(e) {
-        if (connectionAttempts < config.maxAttempts) {
-            connectionAttempts++;
-            log.error('db/connect', {
-                msg: e.message,
-                code: e.code,
-                text: 'Reconnecting',
+    async function getConnection() {
+        if (!pool) pool = await connect();
+        if (connectionAttempts >= config.maxAttempts) {
+            log.error('db/pool', {
+                msg: 'Maximum connection attempts reached',
+                text: 'Exiting',
                 attempts: connectionAttempts
             });
-            connect().catch(e => {
-                log.error('db/connect', {
+            process.exit(1);
+        }
+        try {
+            const getConnectionPromisified = util.promisify(pool.getConnection).bind(pool);
+            let conn = await getConnectionPromisified();
+
+            const errorListener = async function (e) {
+                connectionAttempts++;
+                log.error('db/pool', {
                     msg: e.message,
                     code: e.code,
-                    text: 'Error during reconnection attempt',
+                    text: 'Error in connection, reconnecting...',
                     attempts: connectionAttempts
                 });
-            });
-        } else {
-            log.error('db/connect', {
+                await new Promise(resolve => setTimeout(resolve, 100 * connectionAttempts));
+                return await getConnection();
+            };
+
+            conn.on('error', errorListener);
+            conn.query = util.promisify(conn.query);
+            conn.release = (function (release) {
+                return function () {
+                    conn.removeListener('error', errorListener);
+                    release.call(this);
+                };
+            })(conn.release);
+
+            return conn;
+        } catch (e) {
+            connectionAttempts++;
+            log.error('db/pool', {
                 msg: e.message,
                 code: e.code,
-                text: 'Maximum connection attempts reached',
-                attempts: connectionAttempts
+                attempts: connectionAttempts,
+                text: 'Error on initial connection'
             });
+            await new Promise(resolve => setTimeout(resolve, 100 * connectionAttempts));
+            return await getConnection();
         }
     }
 
@@ -67,18 +92,22 @@ module.exports = function (config, logger = null) {
          * @returns {Promise} A promise that resolves with the query result.
          */
         async query(sql, args = []) {
-            if (typeof promisifiedQuery !== 'function') {
-                await connect();
-            }
-            return promisifiedQuery(sql, args)
-                .then(results => results)
-                .catch(err => {
-                    log.error('db/query', {
-                        args: {sql: sql, args: args},
-                        msg: err.message
-                    });
-                    return null;
+            let connection;
+            try {
+                if (config.queryLog) {
+                    log.debug('db/query', {sql: sql, args: args});
+                }
+                connection = await getConnection();
+                return await connection.query(sql, args);
+            } catch (err) {
+                log.error('db/query', {
+                    args: {sql: sql, args: args},
+                    msg: err.message
                 });
+                return null;
+            } finally {
+                if (connection) connection.release();
+            }
         },
         /**
          * Retrieves the first row of the result from a SQL query.
@@ -189,7 +218,7 @@ module.exports = function (config, logger = null) {
                 });
         },
         close() {
-            return util.promisify(connection.end).call(connection);
+            return util.promisify(pool.end).call(pool);
         }
     };
 
